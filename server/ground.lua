@@ -409,6 +409,36 @@ function GroundItems.flightOwner(id)
     return flight and flight.owner or nil
 end
 
+--- The networked object a client just made, once the server has heard of it: the event naming it
+--- can arrive a moment before the object does.
+---@param netId number
+---@param ms number
+---@return number|nil entity
+function GroundItems.awaitEntity(netId, ms)
+    local deadline = GetGameTimer() + ms
+    while true do
+        local entity = NetworkGetEntityFromNetworkId(netId)
+        if entity and entity ~= 0 and DoesEntityExist(entity) then return entity end
+        if GetGameTimer() > deadline then return nil end
+        Wait(50)
+    end
+end
+
+--- A hash as one unsigned number, so the server's and GetHashKey's spellings compare.
+local function uhash(h) return (math.tointeger(h) or 0) & 0xFFFFFFFF end
+
+--- Is this object the item it is thrown as: of the item's model, or the box an item without one
+--- throws as? A ground row must not be pinned to somebody's car.
+---@param entity number
+---@param itemKey string
+---@return boolean
+function GroundItems.isItemObject(entity, itemKey)
+    local def = Config.Items[itemKey]
+    local model = uhash(GetEntityModel(entity))
+    return model == uhash(GetHashKey((def and def.prop) or Config.DefaultGroundProp))
+        or model == uhash(GetHashKey(Config.DefaultGroundProp))
+end
+
 --- Tell everyone who can see either end of a flight where the pile came to rest. Players who were
 --- sent the pile are those synced to its launch cell; the landing may be a cell further on.
 ---@param data table  the settled cache row
@@ -833,6 +863,200 @@ function GroundItems.createItem(t)
     return item
 end
 exports('CreateGroundItem', GroundItems.createItem)
+
+-- ============================================
+-- A script's throw: ThrowGroundItem
+-- ============================================
+--
+-- Only a game runs physics, so a throw a script asks for is flown by a player's game: `by`, the player the
+-- script names (the robber at the ATM), or else the nearest player in the same world. Either must be within
+-- THROW_FOR_RANGE of `from`, where their game has the ground loaded; further off, the item could fall through
+-- the map there. That game makes the object and lets it go as it lets its own player's throws go
+-- (client/inventory.lua, throwFor), then names it (throwForLaunched, below). From there it is a throw like any
+-- other: the object checked as throwLaunched checks one, a pile flying from the start that anyone in reach can
+-- grab, settled by its flier (throwSettled) or by the watchdog. Nobody near enough, or no launch in time: the pile
+-- is put down at `land`, or under `from`, at once.
+--
+-- The ask is one-shot, as Ask's questions are (server/ask.lua): a launch answers only the ask made of that game,
+-- once, as the character it was made of. A launch after the ask gave up is refused, and its game drops the
+-- object, so an item is never both put down and flying.
+
+local THROW_FOR_RANGE     = 50.0   -- metres from `from` to the player whose game flies it
+local THROW_FOR_ANSWER_MS = 4000   -- no launch by then: put down instead
+local THROW_FOR_SPEED     = 20.0   -- m/s at most: no faster than a player throws, which withinThrow's reach assumes
+local LAUNCH_EVENT        = 'whip_core:server:throwForLaunched'
+
+--- [token] = { flier, charId, promise }: asks waiting for their launch
+local throwAsks = {}
+local throwAskToken = 0
+
+--- A finite number, or nil.
+local function finite(n)
+    n = tonumber(n)
+    if n and n == n and n > -math.huge and n < math.huge then return n end
+    return nil
+end
+
+--- A position or velocity from a vector3, a vector4 or { x, y, z }, or nil.
+---@return vector3|nil
+local function vec3Of(v)
+    local tv = type(v)
+    if tv ~= 'vector3' and tv ~= 'vector4' and tv ~= 'table' then return nil end
+    local x, y, z = finite(v.x), finite(v.y), finite(v.z)
+    if not (x and y and z) then return nil end
+    return vector3(x, y, z)
+end
+
+--- Whose game flies a script's throw: `by` when they are near enough, else the nearest player near enough in
+--- the same world as `by` (its routing bucket; the shared world without one), else nil. Someone still making
+--- their character never flies one, and nor does anyone on the character screen (no character loaded).
+---@param by number|table|nil  a person, as WhoIs takes one
+---@param from vector3
+---@return number|nil source
+local function throwFlier(by, from)
+    local named
+    if by ~= nil then
+        local _, src = WhoIs(by)
+        named = tonumber(src)
+        if named and IsPlayerNear(named, from.x, from.y, from.z, THROW_FOR_RANGE) then return named end
+    end
+    local bucket = named and GetPlayerRoutingBucket(named) or 0
+    local best, bestD2 = nil, THROW_FOR_RANGE * THROW_FOR_RANGE
+    for src, p in pairs(Players) do
+        if p.charId and not p._inCreator and GetPlayerRoutingBucket(src) == bucket then
+            local ped = GetPlayerPed(src)
+            if ped and ped ~= 0 then
+                local c = GetEntityCoords(ped)
+                local dx, dy, dz = c.x - from.x, c.y - from.y, c.z - from.z
+                local d2 = dx * dx + dy * dy + dz * dz
+                if d2 <= bestD2 then best, bestD2 = src, d2 end
+            end
+        end
+    end
+    return best
+end
+
+--- Ask `flier`'s game to fly it, and wait for the launch: the pile, flying, or nil (no launch in time, or not
+--- the object asked for, which its game is told to drop).
+---@return table|nil row
+local function askThrow(flier, item, amount, metadata, createdBy, from, vel)
+    throwAskToken = throwAskToken + 1
+    local token = throwAskToken
+    local ask = { flier = flier, charId = Players[flier] and Players[flier].charId, promise = promise.new() }
+    throwAsks[token] = ask
+    TriggerClientEvent('whip_core:client:throwFor', flier, token, item, from, vel)
+    SetTimeout(THROW_FOR_ANSWER_MS, function()
+        if throwAsks[token] == ask then
+            throwAsks[token] = nil
+            ask.promise:resolve(false)
+        end
+    end)
+    local netId = Citizen.Await(ask.promise)
+    if not netId then return nil end
+
+    -- The object, checked as a player's throw is (throwLaunched): the flier's own, of the item's model, and
+    -- not far from where it was thrown from.
+    local function refuse(recorded)
+        if recorded then RecordEventRejection(LAUNCH_EVENT, flier, recorded) end
+        TriggerClientEvent('whip_core:client:throwRefused', flier, netId)
+        return nil
+    end
+    local entity = GroundItems.awaitEntity(netId, 1500)
+    if not entity then return refuse() end
+    if GetEntityType(entity) ~= 3 or NetworkGetEntityOwner(entity) ~= flier then
+        return refuse('not their own thrown object')
+    end
+    if not GroundItems.isItemObject(entity, item) then return refuse('the thrown object is not that item') end
+    local at = GetEntityCoords(entity)
+    if not GroundItems.withinThrow(from, at) then return refuse('thrown object too far from where it was thrown') end
+
+    local row = GroundItems.create(item, amount, metadata, at.x, at.y, at.z, GetEntityHeading(entity), createdBy,
+        nil, { netId = netId, owner = flier })
+    if not row then return refuse() end
+    TriggerClientEvent('whip_core:client:throwAccepted', flier, netId, row.id)
+    return row
+end
+
+--- The flier's game let go of what it was asked to throw (askThrow), and names the object. Only the game
+--- asked, once, as the character asked; anything else, a launch after the ask gave up included, is dropped
+--- by that game.
+SecureEvent(LAUNCH_EVENT, {
+    rateLimit = 100, burst = 20,   -- a script may throw several at once (a spray of cash)
+    whileDead = true,              -- the flier may be down: their game still runs the throw
+    params = { {'token', 'id'}, {'netId', 'id'} },
+}, function(source, player, token, netId)
+    local ask = throwAsks[token]
+    if not ask or ask.flier ~= source or ask.charId ~= player.charId then
+        TriggerClientEvent('whip_core:client:throwRefused', source, netId)
+        if ask then RecordEventRejection(LAUNCH_EVENT, source, 'not their throw') end
+        return
+    end
+    throwAsks[token] = nil
+    ask.promise:resolve(netId)
+end)
+
+--- Throw an item from a point, as a player throws one: it flies, anyone in reach can grab it out of the air,
+--- and it lies where it comes to rest.
+---
+---     ThrowGroundItem({ item = 'cash', amount = 250, from = vector3(x, y, z), velocity = vector3(vx, vy, vz),
+---                       by = source, land = vector3(x, y, z), reason = 'ATM robbery' })
+---
+--- `velocity` is in metres a second, THROW_FOR_SPEED at most. `by` (a person: a server id or { charId = n }) is
+--- whose game flies it when they are within THROW_FOR_RANGE of `from`; else the nearest player who is. With
+--- nobody that near it is put down at `land` (a vector4's w is its heading), or under `from`, lying still.
+--- `metadata`, `reason` and `createdBy` as CreateGroundItem's.
+---
+--- Returns the row and how it went, 'thrown' (flying now) or 'ground' (put down), or `false, reason`. It waits
+--- for the flier's game: a round trip, THROW_FOR_ANSWER_MS at most.
+---@param t table { item, amount?, from, velocity, by?, land?, metadata?, reason?, createdBy? }
+function GroundItems.throwItem(t)
+    -- Who asked, read BEFORE anything waits (see createItem).
+    local askedBy = Log.byCaller() or 'by whip_core'
+
+    if type(t) ~= 'table' then
+        return false, 'ThrowGroundItem takes one table: { item, amount?, from, velocity, by?, land?, metadata?, reason? }'
+    end
+    if t.reason ~= nil then askedBy = Log.reasonFrom(t.reason) or askedBy end
+    local from, vel = vec3Of(t.from), vec3Of(t.velocity)
+    if not from then return false, 'ThrowGroundItem needs from (a vector3)' end
+    if not vel then return false, 'ThrowGroundItem needs velocity (a vector3, in metres a second)' end
+    if #vel > THROW_FOR_SPEED then
+        return false, ('velocity is %g m/s at most, as fast as a player throws'):format(THROW_FOR_SPEED)
+    end
+    local land
+    if t.land ~= nil then
+        land = vec3Of(t.land)
+        if not land then return false, 'land is a vector3 or vector4' end
+    end
+    if type(t.item) ~= 'string' or not Config.Items[t.item] then
+        return false, ('Unknown item "%s"'):format(tostring(t.item))
+    end
+    local amount = Sanitize.amount(t.amount, 1)
+    if not amount then return false, Sanitize.AMOUNT_ERR end
+    local metadata = type(t.metadata) == 'table' and t.metadata or nil
+
+    local how = 'thrown'
+    local flier = throwFlier(t.by, from)
+    local row = flier and askThrow(flier, t.item, amount, metadata, t.createdBy, from, vel) or nil
+    if not row then
+        how = 'ground'
+        local at = land or from
+        local heading = (type(t.land) == 'vector4' or type(t.land) == 'table') and finite(t.land.w) or 0.0
+        local err
+        row, err = GroundItems.create(t.item, amount, metadata, at.x, at.y, at.z, heading, t.createdBy)
+        if not row then return false, err or 'Could not create the ground item' end
+    end
+
+    DevTools.refresh('gim')
+    -- An item entering the game, as CreateGroundItem's.
+    Log.write(row.createdBy, 'gained', {
+        itemKey = row.item, amount = row.amount,
+        detail  = askedBy .. (how == 'thrown' and ' · thrown' or ' · on the ground'),
+        x = row.x, y = row.y, z = row.z,
+    })
+    return row, how
+end
+exports('ThrowGroundItem', GroundItems.throwItem)
 
 function GroundItems.deleteItem(id)
     -- Both read before the delete: it takes the row out of the cache, and its database wait

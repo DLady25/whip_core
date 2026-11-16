@@ -1870,23 +1870,8 @@ end)
 -- never says (a crash, a disconnect) is the watchdog's, in server/ground.lua. How far a throw may
 -- carry is GroundItems.withinThrow's (ground.lua), here as at throwItemLanded.
 
---- The networked object a client just made, once the server has heard of it: the event naming it
---- can arrive a moment before the object does.
----@param netId number
----@param ms number
----@return number|nil entity
-local function awaitEntity(netId, ms)
-    local deadline = GetGameTimer() + ms
-    while true do
-        local entity = NetworkGetEntityFromNetworkId(netId)
-        if entity and entity ~= 0 and DoesEntityExist(entity) then return entity end
-        if GetGameTimer() > deadline then return nil end
-        Wait(50)
-    end
-end
-
---- A hash as one unsigned number, so the server's and GetHashKey's spellings compare.
-local function uhash(h) return (math.tointeger(h) or 0) & 0xFFFFFFFF end
+-- Finding the thrown object and checking it is the item (GroundItems.awaitEntity, isItemObject) are
+-- ground.lua's, shared with a script's throw (ThrowGroundItem).
 
 SecureEvent('whip_core:server:throwLaunched', {
     rateLimit = 200,
@@ -1914,7 +1899,7 @@ SecureEvent('whip_core:server:throwLaunched', {
     -- The object is theirs and of this item: their own networked object, of the item's model
     -- (or the box an item without one throws as), not far off. A ground row must not be pinned to
     -- somebody's car.
-    local entity = awaitEntity(netId, 1500)
+    local entity = GroundItems.awaitEntity(netId, 1500)
     if not entity then return refuse('The throw was lost') end
     -- Read again after the wait (a move can land in it). Nothing yields between here and the take.
     slotData = player.inventory and Inventory.getSlot(player.inventory, container, slot)
@@ -1923,9 +1908,7 @@ SecureEvent('whip_core:server:throwLaunched', {
         return refuse(nil, 'not their own thrown object')
     end
     local def = Config.Items[slotData.item]
-    local model = uhash(GetEntityModel(entity))
-    if model ~= uhash(GetHashKey((def and def.prop) or Config.DefaultGroundProp))
-        and model ~= uhash(GetHashKey(Config.DefaultGroundProp)) then
+    if not GroundItems.isItemObject(entity, slotData.item) then
         return refuse(nil, 'the thrown object is not that item')
     end
     local at = GetEntityCoords(entity)
@@ -1970,9 +1953,12 @@ end)
 --- The thrower's game saw its throw come to rest: `posed` with the way it lies (yaw as heading, rx
 --- and ry), or snapped upright when it never settled. Only the thrower may say, within a throw's
 --- reach of where it left the hand; a landing far from where the server sees the object is put
---- where the server sees it, upright.
+--- where the server sees it, upright. A burst, because a script's throw of several (ThrowGroundItem)
+--- comes to rest all at once in one game, and while dead, because whoever's game flies one may be
+--- shot while it is in the air.
 SecureEvent('whip_core:server:throwSettled', {
-    rateLimit = 200,
+    rateLimit = 200, burst = 20,
+    whileDead = true,
     params = {
         {'groundId', 'id'},
         {'x', 'number', -10000, 10000},

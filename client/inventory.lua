@@ -2328,10 +2328,29 @@ local function throwVelocity(from, to)
     return dx * h, dy * h, v * tanA * cosA
 end
 
---- Follow a thrown object to rest. `container`, `slot` and `amount` are where it came from.
+--- Let a thrown object go: physics on (it flies and bounces), GTA's heavy air drag off, at this velocity, with a
+--- little tumble (THROW_TWIST_*). A player's throw and a script's (throwFor) leave the hand the same way.
+local function letFly(obj, vx, vy, vz)
+    SetEntityDynamic(obj, true)
+    SetEntityCollision(obj, true, true)
+    SetEntityHasGravity(obj, true)
+    ActivatePhysics(obj)
+    SetEntityMaxSpeed(obj, 100.0)
+    SetEntityVelocity(obj, vx, vy, vz)
+    local function twist()
+        local t = THROW_TWIST_MIN + math.random() * (THROW_TWIST_MAX - THROW_TWIST_MIN)
+        return math.random() < 0.5 and -t or t
+    end
+    SetEntityAngularVelocity(obj, twist(), twist(), twist())
+end
+
+--- Follow a thrown object to rest. `launch(netId)` tells the server it is in the air: throwLaunched for this
+--- player's own throw, throwForLaunched for a script's. Either way the server answers throwAccepted or
+--- throwRefused.
 ---@param obj number  the networked object, already flying
 ---@param launchVel vector3  the velocity it left the hand with
-local function TrackThrow(obj, container, slot, amount, launchVel)
+---@param launch fun(netId: number)
+local function TrackThrow(obj, launchVel, launch)
     -- The hit check starts at the hand with the launch speed, so someone a metre or two ahead still counts (throwHitCheck)
     local mn, mx = GetModelDimensions(GetEntityModel(obj))
     local knock = { hit = {}, pos = GetEntityCoords(obj), vel = launchVel, ahead = KNOCK_AHEAD + #(mx - mn) * 0.5 }
@@ -2345,7 +2364,7 @@ local function TrackThrow(obj, container, slot, amount, launchVel)
         TriggerServerEvent('whip_core:server:throwStarted', netId)
         local t = {}
         pendingThrows[netId] = t
-        TriggerServerEvent('whip_core:server:throwLaunched', container, slot, amount, netId)
+        launch(netId)
 
         local started, still = GetGameTimer(), 0
         while true do
@@ -2379,6 +2398,26 @@ local function TrackThrow(obj, container, slot, amount, launchVel)
         pendingThrows[netId] = nil
     end)
 end
+
+--- The server asks this game to throw an item for a script (ThrowGroundItem, server/ground.lua), because this
+--- player is near where it is thrown from. Made at `from` and let go at `vel` as this player's own throws are,
+--- then followed to rest the same way. Nothing is said back when it cannot be made: with no launch, the server
+--- puts the item down itself.
+RegisterNetEvent('whip_core:client:throwFor', function(token, itemKey, from, vel)
+    if type(token) ~= 'number' or type(itemKey) ~= 'string' then return end
+    if type(from) ~= 'vector3' or type(vel) ~= 'vector3' then return end
+    CreateThread(function()
+        local model = LoadModel(Inventory.itemPropModel(itemKey), 2000)
+        if not model then return end
+        local obj = CreateObject(model, from.x, from.y, from.z, true, true, false)
+        SetModelAsNoLongerNeeded(model)
+        if not obj or obj == 0 then return end
+        letFly(obj, vel.x, vel.y, vel.z)
+        TrackThrow(obj, vel, function(netId)
+            TriggerServerEvent('whip_core:server:throwForLaunched', token, netId)
+        end)
+    end)
+end)
 
 --- Give/throw mode tick, per frame while give mode lasts (started by the giveItem callback, ends with a give, throw or cancel).
 local giveThreadRunning = false
@@ -2502,14 +2541,6 @@ local function giveTick()
                     local obj = CreateObject(model, spawnPos.x, spawnPos.y, spawnPos.z, true, true, false)
                     if obj and obj ~= 0 then
                         if handRot then SetEntityRotation(obj, handRot.x, handRot.y, handRot.z, 2, true) end
-                        -- Physics on: it flies and bounces.
-                        SetEntityDynamic(obj, true)
-                        SetEntityCollision(obj, true, true)
-                        SetEntityHasGravity(obj, true)
-                        ActivatePhysics(obj)
-
-                        -- Remove GTA's heavy default air drag.
-                        SetEntityMaxSpeed(obj, 100.0)
 
                         -- Onto the crosshair on an arc at THROW_SPEED. Out of reach (or the sky): straight along the aim with a little loft.
                         local vx, vy, vz = throwVelocity(spawnPos, targetPoint)
@@ -2517,19 +2548,17 @@ local function giveTick()
                         if not vx or rayHit ~= 1 or (vx * camFwd.x + vy * camFwd.y) <= 0.0 then
                             vx, vy, vz = dirX * THROW_SPEED, dirY * THROW_SPEED, dirZ * THROW_SPEED + THROW_LOFT
                         end
-                        SetEntityVelocity(obj, vx, vy --[[@as number]], vz --[[@as number]])   -- they come with vx
-                        -- A little tumble each time (THROW_TWIST_*).
-                        local function twist()
-                            local t = THROW_TWIST_MIN + math.random() * (THROW_TWIST_MAX - THROW_TWIST_MIN)
-                            return math.random() < 0.5 and -t or t
-                        end
-                        SetEntityAngularVelocity(obj, twist(), twist(), twist())
+                        letFly(obj, vx, vy --[[@as number]], vz --[[@as number]])   -- they come with vx
 
                         -- (Other games hide the ball on throwStarted.)
                         SetModelAsNoLongerNeeded(model)
 
-                        -- It is a ground item now: give mode ends here so the hands are free.
-                        TrackThrow(obj, giveContainer, giveSlot, giveItemAmount, vector3(vx, vy, vz))
+                        -- It is a ground item now: give mode ends here so the hands are free. Where it came from is
+                        -- copied first: CancelGiveMode clears give mode's own before the launch is said.
+                        local container, slot, amount = giveContainer, giveSlot, giveItemAmount
+                        TrackThrow(obj, vector3(vx, vy, vz), function(netId)
+                            TriggerServerEvent('whip_core:server:throwLaunched', container, slot, amount, netId)
+                        end)
                         CancelGiveMode()
                     else
                         -- Prop creation failed: raycast fallback.
