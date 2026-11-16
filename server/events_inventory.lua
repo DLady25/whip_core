@@ -1868,7 +1868,8 @@ end)
 -- of the air. When it stops, the thrower says how it lies (throwSettled) and GroundItems.settle
 -- moves the pile there; clients draw it in place before the flying object is deleted. A thrower who
 -- never says (a crash, a disconnect) is the watchdog's, in server/ground.lua. How far a throw may
--- carry is GroundItems.withinThrow's (ground.lua), here as at throwItemLanded.
+-- carry is GroundItems.withinThrow's (ground.lua), here as at throwItemLanded; once it flies,
+-- GroundItems.flightReaches, which follows a script's throw along its own path.
 
 -- Finding the thrown object and checking it is the item (GroundItems.awaitEntity, isItemObject) are
 -- ground.lua's, shared with a script's throw (ThrowGroundItem).
@@ -1951,9 +1952,9 @@ SecureEvent('whip_core:server:throwLaunched', {
 end)
 
 --- The thrower's game saw its throw come to rest: `posed` with the way it lies (yaw as heading, rx
---- and ry), or snapped upright when it never settled. Only the thrower may say, within a throw's
---- reach of where it left the hand; a landing far from where the server sees the object is put
---- where the server sees it, upright. A burst, because a script's throw of several (ThrowGroundItem)
+--- and ry), or snapped upright when it never settled. Only the thrower may say, somewhere their throw
+--- could have got to (GroundItems.flightReaches); a landing far from where the server sees the object
+--- is put where the server sees it, upright. A burst, because a script's throw of several (ThrowGroundItem)
 --- comes to rest all at once in one game, and while dead, because whoever's game flies one may be
 --- shot while it is in the air.
 SecureEvent('whip_core:server:throwSettled', {
@@ -1979,7 +1980,7 @@ SecureEvent('whip_core:server:throwSettled', {
         RecordEventRejection(EVENT, source, 'not their throw')
         return
     end
-    if not GroundItems.withinThrow(data, vector3(x, y, z)) then   -- data: the launch, while it flies
+    if not GroundItems.flightReaches(data, vector3(x, y, z)) then   -- data: the launch, while it flies
         RecordEventRejection(EVENT, source, 'landed too far from the launch')
         x, y, z, posed = data.x, data.y, data.z, false
     end

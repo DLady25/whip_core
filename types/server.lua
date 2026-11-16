@@ -2417,11 +2417,12 @@ function whip_core:HasVehicleImage(model) end
 ---@async
 function whip_core:CreateGroundItem(def) end
 
---- Throw an item from a point, as a player throws one: ThrowGroundItem({ item, amount, from, velocity, by, land,
---- metadata, reason }). It flies, anyone in reach can grab it out of the air, and it lies where it comes to rest.
---- A player's game flies it: `by` when they are within 50 m of `from`, else the nearest player who is. With
---- nobody that near, it is put down at `land` (or under `from`) instead.
----@param def { item: string, amount?: number, from: vector3, velocity: vector3, by?: number|{ charId: number }, land?: vector3|vector4, metadata?: table, reason?: string, createdBy?: number }  velocity: metres a second, 20 at most; createdBy: the charId it is logged against
+--- Throw an item from a point at a target, as a player throws one: ThrowGroundItem({ item, amount, from, target,
+--- power, by, metadata, reason }). It flies, anyone in reach can grab it out of the air, and it lies where it comes
+--- to rest. Aimed to land on `target` at `power`: too soft falls short, hard skids on; no power is the gentlest throw
+--- that reaches it. A player's game flies it: `by` when they are within 50 m of `from`, else the nearest player who
+--- is. With nobody that near, it is put down where the throw would have come down.
+---@param def { item: string, amount?: number, from: vector3, target: vector3|vector4, power?: number, by?: number|{ charId: number }, metadata?: table, reason?: string, createdBy?: number }  power: 0 to 40 (a player throws at 18; 18 to 22 recommended); createdBy: the charId it is logged against
 ---@return WhipGroundItem|false created The ground item (flying, or put down), or false on failure
 ---@return string how 'thrown' (in the air now) or 'ground' (put down), or the error when it failed
 ---@async

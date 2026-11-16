@@ -2303,30 +2303,12 @@ function Inventory.unwatchThrow(netId)
     if netId then watched[netId] = nil end
 end
 
--- Where a throw goes
+-- Where a throw goes: aimed by ThrowAim (shared/throw_aim.lua), the rule a script's throw shares.
 
-local THROW_SPEED   = 18.0   -- m/s as it leaves the hand
-local THROW_LOFT    = 2.5    -- m/s up, added to a throw at nothing in reach (every throw's arc, before)
+local THROW_SPEED   = 18.0   -- m/s as it leaves the hand: a player's power
 -- The tumble a thrown thing leaves the hand with: a random turn about each axis within these bounds (radians a second, either way). It never changes the path.
 local THROW_TWIST_MIN = 0.8
 local THROW_TWIST_MAX = 4.0
-local THROW_GRAVITY = 9.81
-
---- The velocity that carries a throw from `from` to land on `to` at THROW_SPEED, on the low (flatter) arc. nil when out of reach or straight above or below.
----@return number|nil vx, number|nil vy, number|nil vz
-local function throwVelocity(from, to)
-    local dx, dy, dz = to.x - from.x, to.y - from.y, to.z - from.z
-    local d = math.sqrt(dx * dx + dy * dy)
-    if d < 0.05 then return nil end
-    local v, g = THROW_SPEED, THROW_GRAVITY
-    local v2 = v * v
-    local disc = v2 * v2 - g * (g * d * d + 2.0 * dz * v2)
-    if disc < 0.0 then return nil end
-    local tanA = (v2 - math.sqrt(disc)) / (g * d)
-    local cosA = 1.0 / math.sqrt(1.0 + tanA * tanA)
-    local h = v * cosA / d
-    return dx * h, dy * h, v * tanA * cosA
-end
 
 --- Let a thrown object go: physics on (it flies and bounces), GTA's heavy air drag off, at this velocity, with a
 --- little tumble (THROW_TWIST_*). A player's throw and a script's (throwFor) leave the hand the same way.
@@ -2543,10 +2525,10 @@ local function giveTick()
                         if handRot then SetEntityRotation(obj, handRot.x, handRot.y, handRot.z, 2, true) end
 
                         -- Onto the crosshair on an arc at THROW_SPEED. Out of reach (or the sky): straight along the aim with a little loft.
-                        local vx, vy, vz = throwVelocity(spawnPos, targetPoint)
+                        local vx, vy, vz = ThrowAim.arc(spawnPos, targetPoint, THROW_SPEED)
                         -- Never back toward the thrower.
                         if not vx or rayHit ~= 1 or (vx * camFwd.x + vy * camFwd.y) <= 0.0 then
-                            vx, vy, vz = dirX * THROW_SPEED, dirY * THROW_SPEED, dirZ * THROW_SPEED + THROW_LOFT
+                            vx, vy, vz = ThrowAim.straight(spawnPos, spawnPos + vector3(dirX, dirY, dirZ), THROW_SPEED)
                         end
                         letFly(obj, vx, vy --[[@as number]], vz --[[@as number]])   -- they come with vx
 

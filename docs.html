@@ -4765,30 +4765,30 @@ if not ok then exports.whip_core:NotifyPlayer(source, reason, 'error') end</code
 </div></div>
 
 <div class="export-card" data-search="throwgrounditem ground item throw launch fly spray atm cash">
-<div class="export-header"><span class="export-name">ThrowGroundItem({ item, amount?, from, velocity, by?, land?, metadata?, reason? })</span><span class="export-side side-server">SERVER</span></div>
+<div class="export-header"><span class="export-name">ThrowGroundItem({ item, amount?, from, target, power?, by?, metadata?, reason? })</span><span class="export-side side-server">SERVER</span></div>
 <div class="export-body">
-  <p>Throws an item from a point, the way a player throws one. It's a ground item from the moment it leaves <code>from</code>, so anyone in reach can grab it out of the air, and it lies where it comes to rest.</p>
-  <p>Only a player's game can run the physics, so one of them flies it: <code>by</code> when they're within 50 m of <code>from</code>, otherwise the nearest player who is. That player sees it fly smoothly at any ping, and everyone else sees it as they see any thrown item. When nobody is that close, it's put down at <code>land</code> (or under <code>from</code>) instead, already at rest.</p>
+  <p>Throws an item from one point at another, the way a player throws one. It's a ground item from the moment it leaves <code>from</code>, so anyone in reach can grab it out of the air, and it lies wherever physics leaves it.</p>
+  <p>It's aimed as a player's throw is, on the arc that lands on <code>target</code> at that power. Too soft and it falls short of the target. Hard and it comes in flat and fast, so it skids or bounces on past, or off whatever is in the way. With no <code>power</code> it takes the gentlest throw that reaches the target, which comes down closest to it.</p>
+  <p>Only a player's game can run the physics, so one of them flies it: <code>by</code> when they're within 50 m of <code>from</code>, otherwise the nearest player who is. That player sees it fly smoothly at any ping, and everyone else sees it as they see any thrown item. When nobody is that close, it's put down where the throw would have come down, already at rest.</p>
   <table class="param-table"><tr><th>Field</th><th>Type</th><th>Description</th></tr>
   <tr><td>item</td><td>string</td><td>A registered item key</td></tr>
   <tr><td>amount</td><td>number?</td><td>A whole number, 1 or more (default 1)</td></tr>
   <tr><td>from</td><td>vector3</td><td>Where it's thrown from, a little clear of anything solid so it doesn't bounce straight off</td></tr>
-  <tr><td>velocity</td><td>vector3</td><td>Metres a second, 20 at most (as fast as a player throws)</td></tr>
+  <tr><td>target</td><td>vector3|vector4</td><td>Where it's aimed (a vector4's <code>w</code> is the heading it lies at when put down)</td></tr>
+  <tr><td>power</td><td>number?</td><td>How hard, 0 to 40. A player throws at 18, and 18 to 22 is recommended</td></tr>
   <tr><td>by</td><td>number|table?</td><td>Whose game flies it: a server ID or <code>{ charId = n }</code></td></tr>
-  <tr><td>land</td><td>vector3|vector4?</td><td>Where it lies when nobody is near enough to fly it (a vector4's <code>w</code> is the heading)</td></tr>
   <tr><td>metadata</td><td>table?</td><td>Custom metadata</td></tr>
   <tr><td>reason</td><td>string?</td><td>For the activity log, beside your resource's name</td></tr></table>
-  <div class="return-info"><strong>Returns: </strong><code>table, how</code>: the ground item and <code>'thrown'</code> (in the air now) or <code>'ground'</code> (put down), or <code>false, reason</code> (not a table, an unknown item, a bad amount, no <code>from</code> or <code>velocity</code>, too fast)</div>
-  <p>It waits for the flying player's game to make the throw, so several calls in a row come out one after another.</p>
-<pre><code class="lang-lua">-- The ATM spits the cash out at the robber
+  <div class="return-info"><strong>Returns: </strong><code>table, how</code>: the ground item and <code>'thrown'</code> (in the air now) or <code>'ground'</code> (put down), or <code>false, reason</code> (not a table, an unknown item, a bad amount, no <code>from</code> or <code>target</code>, a power outside 0 to 40)</div>
+  <p>It waits for the flying player's game to make the throw, so several calls in a row come out one after another. A very hard throw can pass straight through thin walls and floors, as GTA objects do at speed.</p>
+<pre><code class="lang-lua">-- The ATM spits the cash out on the pavement in front of it
 local atm = vector4(147.4, -1035.8, 29.3, 160.0)   -- where it stands and the way it faces
 local out = vector3(-math.sin(math.rad(atm.w)), math.cos(math.rad(atm.w)), 0.0)
 exports.whip_core:ThrowGroundItem({
     item = 'cash', amount = 250,
     from = atm.xyz + out * 0.5 + vector3(0.0, 0.0, 1.0),
-    velocity = out * 3.0 + vector3(0.0, 0.0, 2.0),
+    target = atm.xyz + out * 2.0,
     by = source,
-    land = atm.xyz + out * 1.5,
     reason = 'ATM robbery',
 })</code></pre>
 </div></div>

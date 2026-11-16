@@ -53,6 +53,7 @@ shared_script 'shared/interact_spec.lua'
 shared_script 'shared/cam_math.lua'
 shared_script 'shared/cam_sequence.lua'
 shared_script 'shared/take_track.lua'
+shared_script 'shared/throw_aim.lua'
 -- Before any Director file on either side.
 shared_script 'shared/director/kit.lua'
 shared_script 'shared/director/steps.lua'
