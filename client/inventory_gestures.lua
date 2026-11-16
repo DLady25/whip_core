@@ -14,8 +14,55 @@
 --     (whip_core:server:throwLaunched / throwSettled): the pile exists from the moment it leaves the hand and lies
 --     where the object comes to rest. Where no animation fits (swimming, falling, already dropping), it is a plain drop
 --     on a clear spot (DropToGround, client/ground.lua).
+--
+-- BOTH ARE EXTRAS. Clicking (Use), the use keys, a drag onto Nearby and shift-click all work as before, whatever is
+-- set here. Each gesture can be switched off in config.lua (InventoryDragToBody, InventoryDragOutDrops, and for the
+-- drop InventoryDragOutInVehicle / InventoryDragOutAnimated), and for a while by a script (BlockInventoryGesture):
+-- a cell, handcuffs, a no-littering zone.
 
 local function yes(v) return v == true or v == 1 end
+
+-- ---- Switched off for a while: a script's block ----
+
+local GESTURES = { body = true, dropOut = true }
+local gestureBlocks = {}   -- the registry's store: { gesture = 'body'|'dropOut'|nil (both), label = string|nil }
+local gestureReg = Registry.new('InventoryGestureBlock', {
+    label  = 'inventory gesture block',
+    store  = gestureBlocks,
+    scoped = true,
+})
+
+--- May `gesture` ('body' or 'dropOut') be used now? True, or false and why: a block's words, nil when config.lua has
+--- it off (nothing to say: the gesture simply is not there).
+---@return boolean allowed
+---@return string|nil why
+local function gestureAllowed(gesture)
+    if gesture == 'body' and Config.InventoryDragToBody == false then return false end
+    if gesture == 'dropOut' and Config.InventoryDragOutDrops == false then return false end
+    for _, b in pairs(gestureBlocks) do
+        if b.gesture == nil or b.gesture == gesture then return false, b.label end
+    end
+    return true
+end
+exports('InventoryGestureAllowed', gestureAllowed)
+
+--- Switch a gesture off until UnblockInventoryGesture(id), or this resource stops. `gesture`: 'body', 'dropOut', or
+--- nil for both. `label`: what the player is told when they try (a drop); nil says nothing.
+---
+---     exports.whip_core:BlockInventoryGesture('cell', 'dropOut', 'You cannot drop things in here')
+exports('BlockInventoryGesture', function(id, gesture, label)
+    if gesture ~= nil and not GESTURES[gesture] then return false, "gesture must be 'body', 'dropOut' or nil" end
+    if label ~= nil and (type(label) ~= 'string' or #label > 120) then return false, 'label must be a string (120 at most)' end
+    local ok, why = gestureReg:add(Registry.caller(), id, { gesture = gesture, label = label })
+    if not ok then return false, why end
+    return true
+end)
+
+exports('UnblockInventoryGesture', function(id)
+    local ok, why = gestureReg:remove(Registry.caller(), id)
+    if not ok then return false, why end
+    return true
+end)
 
 -- ---- On your character ----
 
@@ -39,7 +86,7 @@ end
 -- { on = true } starts the frames (action 'bodyPoint'), { on = false } stops them. Answers { on }: false when the
 -- gesture is switched off or the inventory is not open, and the page draws no ring.
 RegisterNUICallback('bodyTrack', function(data, cb)
-    local on = type(data) == 'table' and data.on == true and Config.InventoryDragToBody ~= false and Inventory.isOpen()
+    local on = type(data) == 'table' and data.on == true and gestureAllowed('body') and Inventory.isOpen()
     cb({ on = on and true or false })
     bodyRun = bodyRun + 1
     if not on then return end
@@ -47,6 +94,8 @@ RegisterNUICallback('bodyTrack', function(data, cb)
     CreateThread(function()
         local lastX, lastY = -1.0, -1.0
         while mine == bodyRun and Inventory.isOpen() do
+            -- Blocked mid-drag: the ring goes.
+            if not gestureAllowed('body') then SendNUIMessage({ action = 'bodyPoint', hidden = true }) break end
             local x, y = bodyPoint()
             -- Only a move the page can see: a still player sends nothing.
             if math.abs(x - lastX) > 0.0005 or math.abs(y - lastY) > 0.0005 then
@@ -278,11 +327,15 @@ local function perform(ped, anim, model, data, vehicle)
     RemoveAnimDict(anim.dict)
 end
 
--- { container, slot, amount, item }: a stack from the pockets, let go outside every panel. Answers { ok }: false when
--- the gesture is switched off (the page leaves the item where it was).
+-- { container, slot, amount, item }: a stack from the pockets, let go outside every panel. Answers { ok }, or
+-- { ok = false, reason? } when the gesture is off here (the page leaves the item where it was and shows the reason).
 RegisterNUICallback('dropByHand', function(data, cb)
     data = type(data) == 'table' and data or {}
-    if Config.InventoryDragOutDrops == false then return cb({ ok = false }) end
+    local allowed, why = gestureAllowed('dropOut')
+    if not allowed then return cb({ ok = false, reason = why }) end
+    if Config.InventoryDragOutInVehicle == false and IsPedInAnyVehicle(PlayerPedId(), false) then
+        return cb({ ok = false })
+    end
     local slot, amount = math.tointeger(tonumber(data.slot)), math.tointeger(tonumber(data.amount))
     if not ON_PERSON[data.container] or not slot or not amount or amount < 1 or type(data.item) ~= 'string' then
         return cb({ ok = false })
@@ -292,8 +345,8 @@ RegisterNUICallback('dropByHand', function(data, cb)
     local ped = PlayerPedId()
     local vehicle = GetVehiclePedIsIn(ped, false)
     local anim = vehicle ~= 0 and vehicleAnim(ped, vehicle) or (vehicle == 0 and FOOT or nil)
-    -- No animation where none fits: a plain drop on a clear spot.
-    if not anim or dropping or yes(IsPedSwimming(ped)) or yes(IsPedFalling(ped)) or yes(IsPedRagdoll(ped))
+    -- No animation where none fits, or none wanted (InventoryDragOutAnimated): a plain drop on a clear spot.
+    if Config.InventoryDragOutAnimated == false or not anim or dropping or yes(IsPedSwimming(ped)) or yes(IsPedFalling(ped)) or yes(IsPedRagdoll(ped))
         or yes(IsEntityDead(ped)) then
         return DropToGround(data.container, slot, amount)
     end

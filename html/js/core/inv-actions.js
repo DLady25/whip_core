@@ -833,14 +833,15 @@ export function equip(at) {
 /**
  * OUT OF THE INVENTORY (Config.InventoryDragOutDrops): drop the whole stack from the hand. On foot the player puts it
  * down; in a vehicle they toss it out of their window. The item stays in its slot until it leaves the hand, then the
- * server's push takes it off. Pockets only; answers { ok: false } when the gesture is switched off.
+ * server's push takes it off. Pockets only; answers { ok: false, reason? } when the gesture is off (config.lua, or a
+ * script's BlockInventoryGesture, whose words are the reason).
  * @returns {Promise<{ok: boolean, reason?: string}>}
  */
 export function dropOut(at) {
     const d = onPerson(at);
     if (!d) return Promise.resolve(no());
     return nuiCallback('dropByHand', { container: at.container, slot: Number(at.slot), amount: d.amount || 1, item: d.item })
-        .then(r => (r && r.ok === true ? ok : no()));
+        .then(r => (r && r.ok === true ? ok : no(r && r.reason ? r.reason : undefined)));
 }
 
 // ------------------------------------------

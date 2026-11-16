@@ -1386,7 +1386,8 @@ function dragEndBody(e) {
     // OUT OF THE INVENTORY (Config.InventoryDragOutDrops): let go of a pocket's item outside every panel, and it is
     // dropped from the hand. Lua refuses it when the gesture is off, and the item stays where it was.
     if (!target && !shop.open && isPocketGrid(dragSourceSlot.dataset.container) && outsidePanels(e.clientX, e.clientY)) {
-        dropOut({ container: dragSourceSlot.dataset.container, slot: parseInt(dragSourceSlot.dataset.slot) });
+        dropOut({ container: dragSourceSlot.dataset.container, slot: parseInt(dragSourceSlot.dataset.slot) })
+            .then((r) => { if (!r.ok && r.reason) uiNotify({ text: r.reason, type: 'error', duration: 3000 }); });
         cancelDrag();
         return;
     }

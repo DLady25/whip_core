@@ -99,6 +99,7 @@ export function active() {
 
 NuiRouter.register('bodyPoint', (d) => {
     if (!live || !d) return;
+    if (d.hidden) { live = false; setHot(false); if (el) el.hidden = true; return; }   // blocked mid-drag
     point = { x: Number(d.x) * window.innerWidth, y: Number(d.y) * window.innerHeight };
     place();
 });

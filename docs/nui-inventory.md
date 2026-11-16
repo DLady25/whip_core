@@ -132,8 +132,20 @@ redraw();
 
 ## Gestures on the world: onto the character, out of the inventory
 
-Two gestures whip's own inventory has, each with its own switch in config.lua (on by default), that a custom UI gets
-by calling the same things:
+Two gestures whip's own inventory has, that a custom UI gets by calling the same things. They are extras: clicking
+Use, the use keys, a drag onto Nearby and shift-click work as before. Each can be switched off:
+
+| Setting (config.lua, also on `/whip` → Config) | Default | Off |
+| --- | --- | --- |
+| `InventoryDragToBody` | `true` | No ring |
+| `InventoryDragOutDrops` | `true` | Letting go outside the panels does nothing |
+| `InventoryDragOutInVehicle` | `true` | The same, but only from inside a vehicle |
+| `InventoryDragOutAnimated` | `true` | No put-down / toss: it lands on a clear spot at once |
+
+And for a while, from a script (client exports): `BlockInventoryGesture(id, 'body' | 'dropOut' | nil, label?)` until
+`UnblockInventoryGesture(id)` or your resource stops, for a cell, handcuffs or a zone. `label` is shown to a player
+who tries the drop. `InventoryGestureAllowed(gesture)` answers whether one may be used now, for a renderer that brings
+its own gestures.
 
 - **Onto the character** (`Config.InventoryDragToBody`). While an item from the pockets is dragged, a ring shows over
   the player's own character in the world, wherever they are on screen; letting go on it is `actions.equip`. whip
